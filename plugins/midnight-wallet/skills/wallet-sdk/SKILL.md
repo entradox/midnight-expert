@@ -10,7 +10,8 @@ description: >-
   prover client), or Bech32m address formatting. Also covers ProtocolVersion,
   SyncProgress, FacadeState, and the wallet runtime. Also covers embedded
   (email/social login) wallets on Midnight via Dynamic's WaaS connector, where
-  the user has no extension and no local proof server.
+  the user has no extension and needs no proof server for transfers (contract
+  calls still need one the app supplies).
 ---
 
 # Wallet SDK Reference
@@ -37,9 +38,10 @@ DApp with a browser extension wallet (Lace or other), load
 extension at all (email or social login, wallet created for the user), the keys are
 MPC shares held by a provider and the prover runs in their wallet client. That is not
 this SDK; it is `references/embedded-wallets.md`. The model differs on three points
-that bite in production: no local proof server, no cross-pool (unshielded→shielded)
-transfers, and the connector detects the network from a **name substring**, which reads
-`Preview`/`Preprod` as mainnet. Read that page before writing any network gate.
+that bite in production: no proof server for transfers (contract calls still need one
+your app supplies), no cross-pool (unshielded→shielded) transfers, and the connector
+detects the network from a **name substring**, which reads `Preview`/`Preprod` as
+mainnet. Read that page before writing any network gate.
 
 ## Quick Start: Wallet Construction
 

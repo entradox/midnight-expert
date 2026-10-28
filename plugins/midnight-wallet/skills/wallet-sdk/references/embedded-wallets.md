@@ -1,9 +1,10 @@
 # Embedded Wallets (Email / Social Login)
 
 How a user goes from an email address to a Midnight transaction with no extension
-install and no local proof server. This page covers **Dynamic's embedded Midnight
-wallet** (`@dynamic-labs/midnight`), the only shipped Wallet-as-a-Service path on
-Midnight as of 2026-10-22.
+install and no proof server for transfers. This page covers **Dynamic's embedded Midnight
+wallet** (`@dynamic-labs/midnight`), the only hosted email/social wallet path on Midnight
+with a published package that we found as of 2026-10-22. Contract calls still need a
+proof server your app supplies (see [Contract calls](#contract-calls)).
 
 > **Not the Wallet SDK.** This is a *hosted* wallet: keys are TSS-MPC shares, the
 > prover runs in the provider's wallet client, and your app never sees a seed. If
@@ -15,13 +16,13 @@ Midnight as of 2026-10-22.
 | Fact | Evidence |
 |---|---|
 | Package is real and actively released | first publish 2026-04-03, 93 stable versions, `5.12.2` published 2026-10-21T20:10Z |
-| Implements the official connector contract | depends on `@midnight-ntwrk/dapp-connector-api@4.0.1` |
+| Uses the official connector types | depends on `@midnight-ntwrk/dapp-connector-api@4.0.1`; the WaaS `ConnectedAPI` shim implements only the address and balance getters and `submitTransaction` (`makeTransfer` throws unsupported) |
 | Wallet logic is **not** in this package | no `@midnightntwrk/wallet-sdk-*` dependency; signing/proving proxies to `@dynamic-labs-wallet/browser-wallet-client` over an authenticated call (`authToken` + MFA token + signed session) |
 | Adoption at time of writing | 564 npm downloads in the week to 2026-10-18 |
 
 Midnight's own documentation still lists Dynamic as unsupported ("as of June 2026").
-That page is stale — the package, its API surface, and Dynamic's docs (last modified
-2026-09-16) all exist. Probe npm before repeating the docs' claim.
+That page is stale: the package, its API surface, and Dynamic's docs all exist. Probe
+npm before repeating the docs' claim.
 
 ## Wiring
 
@@ -40,7 +41,7 @@ Two console settings are required before any call works:
 
 ```tsx
 import { DynamicContextProvider, DynamicWidget } from '@dynamic-labs/sdk-react-core';
-import { DynamicWaasMidnightConnectors, isMidnightWallet } from '@dynamic-labs/midnight';
+import { DynamicWaasMidnightConnectors, isMidnightWallet, type DynamicWaasMidnightConnector } from '@dynamic-labs/midnight';
 
 <DynamicContextProvider
   settings={{
@@ -52,8 +53,9 @@ import { DynamicWaasMidnightConnectors, isMidnightWallet } from '@dynamic-labs/m
 </DynamicContextProvider>
 ```
 
-For an extension wallet (1AM, Lace) use `MidnightWalletConnectors` from the same
-package — that path is a thin wrapper over `window.midnight`.
+For an extension wallet use `MidnightWalletConnectors` from the same package, a thin
+wrapper over `window.midnight`. Dynamic's docs and launch post name 1AM and Gero for
+that path; Lace is not listed, so feature-detect it rather than assume it.
 
 ## The wallet is three surfaces, not one address
 
@@ -123,8 +125,10 @@ const { status } = await wallet.registerDust();
 ```
 
 - Registration designates **unshielded NIGHT** for DUST generation. No NIGHT → `no_utxos`.
-- DUST then accrues over time (Midnight docs: ~12 hours on mainnet). A zero balance
-  immediately after registering is expected, not a bug.
+- DUST then accrues linearly. The Midnight docs quote about 12 hours on Lace as a rule
+  of thumb; on mainnet a DUST UTXO takes about a week to reach its cap (1,000 NIGHT
+  generates about 0.0083 DUST per second), so time to first spend depends on the NIGHT
+  amount and the fee. A zero balance immediately after registering is expected, not a bug.
 - **No fee sponsorship on Midnight** through Dynamic: their gasless feature is scoped
   to EVM and Solana. Every user needs their own DUST, or your app pre-funds and
   pre-registers on their behalf and waits.
@@ -155,9 +159,13 @@ mainnet.
 Do this instead:
 
 ```typescript
-// Derive the network from the data you control, not from a name heuristic.
-const networkId = await wallet.getNetworkId();          // log it once, in every env
-const isTest = networkId === 0 && /* your own env flag */ process.env.CHAIN === 'preview';
+// Do not call getNetworkId() or isTestnet() here: both are the substring heuristic.
+// The connector signs and encodes addresses for the network it resolves as
+// name.includes('mainnet') ? 'mainnet' : 'preview', and it never yields 'preprod'.
+const network = (wallet.connector as DynamicWaasMidnightConnector).getSelectedMidnightNetwork(); // 'preview' | 'mainnet'
+if (network !== process.env.MIDNIGHT_NETWORK) {
+  throw new Error(`wallet resolved ${network}, app expects ${process.env.MIDNIGHT_NETWORK}`);
+}
 ```
 
 and assert in CI that the staging build reports the staging network before any
@@ -169,9 +177,10 @@ transaction is signed.
 const provider = await wallet.getWalletProvider(); // midnight-js compatible
 ```
 
-The embedded wallet acts as the **settlement half** of a call — balancing, paying
-DUST, signing, submitting — while your app runs the circuit and generates the proof,
-all inside the wallet iframe. If the client build is old you get
+The embedded wallet acts as the **settlement half** of a call, all inside the wallet
+iframe: balancing, paying DUST, signing, submitting. Your app still runs the circuit and
+generates the proof, against a proof server you supply (Dynamic's contracts page uses
+`httpClientProofProvider('http://localhost:6300')`). If the client build is old you get
 `midnight_wallet_provider_unsupported_client` naming the missing RPCs; upgrade
 `@dynamic-labs-wallet/browser-wallet-client` rather than working around it.
 
@@ -180,14 +189,15 @@ all inside the wallet iframe. If the client build is old you get
 - [ ] Enable Midnight **and** Private Key Exports in the console (403 otherwise).
 - [ ] Surface **both** the unshielded and shielded address; label which pool a deposit lands in.
 - [ ] Fund shielded via a shielded sender — no in-app conversion exists.
-- [ ] Register DUST from unshielded NIGHT, then wait (~12h mainnet); show a countdown, not an error.
+- [ ] Register DUST from unshielded NIGHT, then wait; show progress from `dust.balance` against `dust.cap`, not an error.
 - [ ] Never gate behavior on `isTestnet()`; resolve the network explicitly and assert it.
 - [ ] Poll `dustSyncing` before enabling Send.
-- [ ] Price the provider: the free tier is real, but "free to 10,000 MAU" is an
-      early-stage program — confirm the rate card in writing before launch.
+- [ ] Price the provider: Dynamic's public pricing page lists a free sandbox and paid
+      plans by MAU (Growth at $249/month up to 5,000 MAU on 2026-10-26). Confirm the
+      rate card in writing before launch.
 
 ## Sources
 
 - `npm view @dynamic-labs/midnight` (versions, publish dates, deps) — run it, do not trust this page.
-- Dynamic docs: `docs/…/using-wallets/midnight/midnight-embedded-wallets` and `…/using-midnight-wallets` (last modified 2026-09-16).
+- Dynamic docs: `docs/react/wallets/using-wallets/midnight/midnight-embedded-wallets`, `…/using-midnight-wallets` and `…/midnight-contracts`.
 - Midnight docs: `sdks/community/wallets/community-wallets-integration` (proving models, DUST timing) and `…-reference` (wallet matrix — Dynamic row is stale).
